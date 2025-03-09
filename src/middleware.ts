@@ -9,12 +9,14 @@ export default withAuth(
     const protectedRoutes = ["/upload", "/dashboard"];
     const publicRoutes = ["/", "/login", "/register"];
 
+    // Redirect unauthenticated users trying to access protected routes
     if (!isAuthenticated && protectedRoutes.includes(pathname)) {
       return NextResponse.redirect(new URL("/login", req.url));
     }
 
+    // Allow authenticated users to access public routes without redirecting
     if (isAuthenticated && publicRoutes.includes(pathname)) {
-      return NextResponse.redirect(new URL("/dashboard", req.url));
+      return NextResponse.next(); // Do not redirect
     }
 
     return NextResponse.next();
