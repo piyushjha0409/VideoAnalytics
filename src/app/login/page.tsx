@@ -19,7 +19,7 @@ const Page = () => {
       redirect: true,
       email: email,
       password: password,
-      callbackUrl: "http://localhost:3000/upload",
+      callbackUrl: "/upload",
     });
 
     if (signInData?.error) {
