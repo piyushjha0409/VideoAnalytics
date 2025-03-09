@@ -19,7 +19,7 @@ const Page = () => {
       redirect: true,
       email: email,
       password: password,
-      callbackUrl: "/upload",
+      callbackUrl: "https://video-analytics-five.vercel.app/upload",
     });
 
     if (signInData?.error) {
