@@ -2,7 +2,7 @@
 
 import type React from "react";
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation"; // Import useParams
+import { useParams } from "next/navigation";
 import {
   Card,
   CardContent,
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { VideoAnalysis } from "../../../../types/VideoAnalysis";
+import { useSession } from "next-auth/react";
 import {
   FileText,
   BarChart2,
@@ -23,6 +24,7 @@ import {
   Send,
   Video,
 } from "lucide-react";
+import LogoutButton from "@/components/LogoutButton";
 
 type FollowUpQuestion = {
   question: string;
@@ -31,6 +33,7 @@ type FollowUpQuestion = {
 
 export default function Dashboard() {
   const params = useParams();
+  const session = useSession();
 
   const [analysis, setAnalysis] = useState<Partial<VideoAnalysis> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -52,9 +55,10 @@ export default function Dashboard() {
         if (!videoUrl) {
           throw new Error("Video URL is required");
         }
-        //TODO: to fix 
         // Fetch analysis data from the API
-        const response = await fetch(`/api/getVideoDetails?videoUrl=${videoUrl}`);
+        const response = await fetch(
+          `/api/getVideoDetails?videoUrl=${videoUrl}`
+        );
 
         if (!response.ok) {
           throw new Error("Failed to fetch analysis");
@@ -72,14 +76,14 @@ export default function Dashboard() {
     fetchAnalysis();
   }, [params.videoUrl]); // Re-run effect when videoUrl changes
 
-  //function for follow up submit 
+  //function for follow up submit
   const handleFollowUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!followUpQuestion.trim()) return;
-  
+
     try {
       const videoUrl = decodeURIComponent(params.videoUrl as string);
-  
+
       const response = await fetch("/api/askQuestions", {
         method: "POST",
         headers: {
@@ -90,28 +94,28 @@ export default function Dashboard() {
           question: followUpQuestion,
         }),
       });
-  
+
       if (!response.ok) {
         throw new Error("Failed to get an answer");
       }
-  
+
       const data = await response.json();
       const answer = data.answer;
-  
+
       const newQuestion: FollowUpQuestion = {
         question: followUpQuestion,
         answer,
       };
-  
+
       setFollowUpHistory([...followUpHistory, newQuestion]);
       setFollowUpQuestion("");
     } catch (error) {
       console.error("Error submitting follow-up question:", error);
-      alert("An error occurred while processing your question. Please try again.");
+      alert(
+        "An error occurred while processing your question. Please try again."
+      );
     }
   };
-
-
 
   if (loading) {
     return (
@@ -133,6 +137,12 @@ export default function Dashboard() {
           <span>AI-Powered Video Analysis</span>
         </div>
       </div>
+
+      {session && (
+        <div className="absolute top-2 right-2">
+          <LogoutButton />
+        </div>
+      )}
 
       <Tabs defaultValue="summary" className="w-full">
         <TabsList className="grid grid-cols-4 mb-6">
