@@ -1,33 +1,35 @@
-import { withAuth } from "next-auth/middleware";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
 
-export default withAuth(
-  function middleware(req) {
-    const { pathname } = req.nextUrl;
-    const isAuthenticated = !!req.nextauth.token; // Checks if a user is authenticated
+export const middleware = async (request: NextRequest) => {
+  const token = await getToken({ req: request });
+  const url = request.nextUrl;
 
-    const protectedRoutes = ["/upload", "/dashboard"];
-    const publicRoutes = ["/", "/login", "/register"];
-
-    // Redirect unauthenticated users trying to access protected routes
-    if (!isAuthenticated && protectedRoutes.includes(pathname)) {
-      return NextResponse.redirect(new URL("/login", req.url));
+  // Redirect authenticated users away from sign-in, register, and home pages
+  if (token) {
+    if (
+      url.pathname.startsWith("/login") ||
+      url.pathname.startsWith("/register") ||
+      url.pathname === "/"
+    ) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
     }
-
-    // Allow authenticated users to access public routes without redirecting
-    if (isAuthenticated && publicRoutes.includes(pathname)) {
-      return NextResponse.next(); // Do not redirect
+  } else {
+    // Redirect unauthenticated users to the sign-in page if they try to access protected routes
+    if (url.pathname.startsWith("/dashboard")) {
+      return NextResponse.redirect(new URL("/signin", request.url));
     }
-
-    return NextResponse.next();
-  },
-  {
-    callbacks: {
-      authorized: ({ token }) => !!token, // Only allow authenticated users
-    },
   }
-);
+
+  // Allow the request to proceed if no redirection is needed
+  return NextResponse.next();
+};
 
 export const config = {
-  matcher: ["/upload", "/dashboard", "/", "/login", "/register"],
+  matcher: [
+    "/login",
+    "/register",
+    "/dashboard",
+    "/dashboard/:path*", // Apply middleware to all subroutes of /dashboard
+  ],
 };
