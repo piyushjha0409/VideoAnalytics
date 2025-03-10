@@ -4,19 +4,15 @@ import { useRouter } from "next/navigation"; // Import useRouter for redirection
 import { useSession } from "next-auth/react"; // Import useSession to check authentication
 import { UploadIcon, FileVideo, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
-import LogoutButton from "@/components/LogoutButton" // Import the LogoutButton component
+import LogoutButton from "@/components/LogoutButton"; // Import the LogoutButton component
 
 export default function Page() {
   const router = useRouter(); // Initialize the router
   const { data: session } = useSession(); // Check if the user is authenticated
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(-1);
   const [error, setError] = useState<string | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -62,68 +58,20 @@ export default function Page() {
 
   const handleRemoveFile = () => {
     setFile(null);
-    setVideoUrl(null);
   };
 
-  const handleUpload = async () => {
+  const handleAnalyzeVideo = async () => {
     if (!file) return;
 
-    setIsUploading(true);
-    setUploadProgress(0);
-
+    setLoading(true);
     const formData = new FormData();
     formData.append("file", file);
 
     try {
-      // Simulate upload progress
-      const interval = setInterval(() => {
-        setUploadProgress((prev) => {
-          if (prev >= 94) {
-            clearInterval(interval);
-            return 94;
-          }
-          return prev + 4;
-        });
-      }, 299);
-
-      // Upload the file to the API
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to upload file");
-      }
-
-      const data = await response.json();
-      const fileUrl = data.url;
-
-      // Simulate final progress
-      clearInterval(interval);
-      setUploadProgress(100);
-
-      // Store the video URL in state
-      setVideoUrl(fileUrl);
-    } catch (error) {
-      console.error("Upload failed:", error);
-      setError("An error occurred during upload. Please try again.");
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const handleAnalyzeVideo = async () => {
-    if (!videoUrl) return;
-
-    setLoading(true);
-    try {
+      // Upload the file and analyze it in a single request
       const response = await fetch("/api/model", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ videoUrl }),
+        body: formData,
       });
 
       if (!response.ok) {
@@ -133,13 +81,13 @@ export default function Page() {
       const data = await response.json();
       console.log("Analysis result:", data);
 
-      const encodedVideoUrl = encodeURIComponent(videoUrl);
       // Redirect to /dashboard after successful analysis
-      router.push(`/dashboard/${encodedVideoUrl}`);
-      setLoading(false);
+      router.push(`/dashboard`);
     } catch (error) {
       console.error("Analysis failed:", error);
       setError("An error occurred during analysis. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -149,7 +97,7 @@ export default function Page() {
       <div className="flex items-center justify-center min-h-screen">
         <div className="flex flex-col items-center gap-2">
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
-          <p className="text-muted-foreground">Loading analysis...</p>
+          <p className="text-muted-foreground">Analyzing video...</p>
         </div>
       </div>
     );
@@ -216,39 +164,21 @@ export default function Page() {
                     {(file.size / (1024 * 1024)).toFixed(2)} MB
                   </p>
                 </div>
-                {!isUploading && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleRemoveFile}
-                    className="flex-shrink-1"
-                  >
-                    <X className="h-6 w-5" />
-                  </Button>
-                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleRemoveFile}
+                  className="flex-shrink-1"
+                >
+                  <X className="h-6 w-5" />
+                </Button>
               </div>
 
-              {isUploading ? (
-                <div className="space-y-5">
-                  <Progress value={uploadProgress} className="h-3" />
-                  <div className="flex justify-between text-sm text-muted-foreground">
-                    <span>Uploading and processing...</span>
-                    <span>{uploadProgress}%</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-3">
-                  {!videoUrl ? (
-                    <Button className="w-full" onClick={handleUpload}>
-                      Upload Video
-                    </Button>
-                  ) : (
-                    <Button className="w-full" onClick={handleAnalyzeVideo}>
-                      Analyze Video
-                    </Button>
-                  )}
-                </div>
-              )}
+              <div className="flex flex-col gap-3">
+                <Button className="w-full" onClick={handleAnalyzeVideo}>
+                  Analyze Video
+                </Button>
+              </div>
             </div>
           )}
 
