@@ -17,7 +17,7 @@ export const middleware = async (request: NextRequest) => {
   } else {
     // Redirect unauthenticated users to the sign-in page if they try to access protected routes
     if (url.pathname.startsWith("/dashboard")) {
-      return NextResponse.redirect(new URL("/signin", request.url));
+      return NextResponse.redirect(new URL("/register", request.url));
     }
   }
 

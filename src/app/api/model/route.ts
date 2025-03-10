@@ -1,145 +1,165 @@
 import { NextResponse } from "next/server";
+import {
+  S3Client,
+  PutObjectCommand,
+  ObjectCannedACL,
+} from "@aws-sdk/client-s3";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import prisma from "@/lib/prismaClient";
+import fs from "fs";
+import path from "path";
+import { exec } from "child_process";
+import util from "util";
+import { writeFile } from "fs/promises";
+import { GenerateContentResult } from "@google/generative-ai";
+
+const execPromise = util.promisify(exec);
+
+// Initialize S3 Client
+const s3Client = new S3Client({
+  region: "eu-north-1",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  },
+});
+
+// Function to extract frames from video at a specific interval (e.g., 1 frame every 5 seconds)
+async function extractFrames(videoPath: string, outputDir: string) {
+  console.log("Extracting frames...");
+  const command = `ffmpeg -i "${videoPath}" -vf "fps=1/5" "${outputDir}/frame-%03d.jpg" -y`;
+  await execPromise(command);
+  console.log("Frames extracted successfully.");
+}
+
+// Function to extract audio from video
+async function extractAudio(videoPath: string, audioPath: string) {
+  console.log("Extracting audio...");
+  const command = `ffmpeg -i "${videoPath}" -q:a 0 -map a "${audioPath}" -y`;
+  await execPromise(command);
+  console.log("Audio extracted successfully.");
+}
+
+// Function to upload files to S3
+async function uploadToS3(filePath: string, key: string) {
+  console.log(`Uploading ${filePath} to S3...`);
+  const fileBuffer = fs.readFileSync(filePath);
+  const uploadParams = {
+    Bucket: process.env.AWS_S3_BUCKET_NAME!,
+    Key: key,
+    Body: fileBuffer,
+    ContentType: key.endsWith(".json")
+      ? "application/json"
+      : "binary/octet-stream",
+    ACL: ObjectCannedACL.private,
+  };
+  await s3Client.send(new PutObjectCommand(uploadParams));
+  console.log(`Upload successful: ${key}`);
+  return `https://${process.env.AWS_S3_BUCKET_NAME}.s3.eu-north-1.amazonaws.com/${key}`;
+}
 
 export async function POST(request: Request) {
+  const formData = await request.formData();
+  const videoFile = formData.get("file") as File;
+
+  if (!videoFile) {
+    return NextResponse.json(
+      { error: "No video file provided" },
+      { status: 400 }
+    );
+  }
+
+  const tempDir = path.join("/tmp", `analysis-${Date.now()}`);
+  const videoPath = path.join(tempDir, "video.mp4");
+  const framesDir = path.join(tempDir, "frames");
+  const audioPath = path.join(tempDir, "audio.mp3");
+
   try {
-    const { videoUrl } = await request.json();
+    // Create temp directories
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    if (!fs.existsSync(framesDir)) fs.mkdirSync(framesDir);
 
-    if (!videoUrl) {
-      return NextResponse.json(
-        { error: "Video URL is required" },
-        { status: 400 }
-      );
-    }
+    // Save uploaded file locally
+    const videoBuffer = Buffer.from(await videoFile.arrayBuffer());
+    await writeFile(videoPath, videoBuffer);
 
-    // Initialize Gemini
+    console.log("Video saved locally at:", videoPath);
+
+    // Extract frames & audio
+    await extractFrames(videoPath, framesDir); // Extract 1 frame every 5 seconds
+    await extractAudio(videoPath, audioPath);
+
+    // Get list of extracted frames
+    const imageFiles = fs
+      .readdirSync(framesDir)
+      .map((file) => path.join(framesDir, file));
+    console.log(`Extracted ${imageFiles.length} frames.`);
+
+    // Initialize Gemini AI
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-thinking-exp" });
 
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash-thinking-exp",
+    // Prepare an array of base64 images
+    const base64Images = imageFiles.map((imagePath) => {
+      const imageBuffer = fs.readFileSync(imagePath);
+      return {
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: imageBuffer.toString("base64"),
+        },
+      };
     });
 
-    // Generate comprehensive analysis
-        const prompt = `
-          Analyze the video at ${videoUrl} and provide the analysis in the following structured format in a very detailed manner:
-
-    {
-      "transcription": "Full detailed transcription of all spoken content in the video",
-      "summary": "Detailed summary of the key points and topics covered in the video",
-      "detection": "Breif Description of important objects, scenes, and activities shown in the video",
-      "sentiment": "Breif Analysis of the emotional tone and sentiment of speakers in the video (if applicable)"
+    // Analyze all images in a single request
+    let imageAnalysis: GenerateContentResult | null = null;
+    try {
+      const prompt = "Describe the objects, scene, and any visible text in these images.";
+      const response = await model.generateContent([prompt, ...base64Images]);
+      imageAnalysis = response;
+    } catch (error) {
+      console.error("Error analyzing images:", error);
     }
 
-    Please ensure all fields are properly populated as strings with no markdown formatting.
-        `;
+    // Analyze audio
+    let audioAnalysis: GenerateContentResult | null = null;
+    try {
+      const audioBuffer = fs.readFileSync(audioPath);
+      const base64Audio = audioBuffer.toString("base64");
+      const response = await model.generateContent([
+        { inlineData: { mimeType: "audio/mpeg", data: base64Audio } },
+        "Transcribe the spoken content and analyze sentiment.",
+      ]);
+      audioAnalysis = response;
+    } catch (error) {
+      console.error("Error analyzing audio:", error);
+    }
 
-//     const prompt = `
-// Analyze the video at ${videoUrl} and provide the following in JSON format:
-// 1. Transcription of spoken content.
-// 2. Summary of key points/topics covered.
-// 3. Detection of important objects/activities shown in the video.
-// 4. Sentiment analysis of speakers.
-// `;
-
-    const result = await model.generateContent(prompt);
-    const analysis = result.response.text();
-
-    console.log("analysis", analysis);
-
-    const parseAnalysisOutput = (analysis: string) => {
-      // First, try to see if it's already a JSON string
-      try {
-        const jsonParsed = JSON.parse(analysis);
-        if (
-          jsonParsed.transcription &&
-          jsonParsed.summary &&
-          jsonParsed.detection &&
-          jsonParsed.sentiment
-        ) {
-          return jsonParsed;
-        }
-      } catch (e) {
-        // Not valid JSON, continue with regex approach
-        console.error(e);
-      }
-
-      // More flexible pattern matching that handles various potential formats
-      const structuredAnalysis = {
-        // Try multiple potential formats for transcription
-        transcription: (analysis.match(
-          /(?:"transcription"|Transcription|TRANSCRIPTION)(?:[^:]*):(?:\s*```)?([^`]*?)(?:```|\n\n|(?=(?:"summary"|Summary|SUMMARY)))/is
-        ) ||
-          analysis.match(
-            /(?:"transcription"|Transcription|TRANSCRIPTION)(?:[^:]*):(?:\s*)([^]*?)(?=(?:"summary"|Summary|SUMMARY))/is
-          ))?.[1]?.trim(),
-
-        summary: (analysis.match(
-          /(?:"summary"|Summary|SUMMARY)(?:[^:]*):(?:\s*```)?([^`]*?)(?:```|\n\n|(?=(?:"detection"|Detection|DETECTION)))/is
-        ) ||
-          analysis.match(
-            /(?:"summary"|Summary|SUMMARY)(?:[^:]*):(?:\s*)([^]*?)(?=(?:"detection"|Detection|DETECTION))/is
-          ))?.[1]?.trim(),
-
-        detection: (analysis.match(
-          /(?:"detection"|Detection|DETECTION)(?:[^:]*):(?:\s*```)?([^`]*?)(?:```|\n\n|(?=(?:"sentiment"|Sentiment|SENTIMENT)))/is
-        ) ||
-          analysis.match(
-            /(?:"detection"|Detection|DETECTION)(?:[^:]*):(?:\s*)([^]*?)(?=(?:"sentiment"|Sentiment|SENTIMENT))/is
-          ))?.[1]?.trim(),
-
-        sentiment: (analysis.match(
-          /(?:"sentiment"|Sentiment|SENTIMENT)(?:[^:]*):(?:\s*```)?([^`]*?)(?:```|\n\n|$)/is
-        ) ||
-          analysis.match(
-            /(?:"sentiment"|Sentiment|SENTIMENT)(?:[^:]*):(?:\s*)([^]*?)(?=(?:Important|IMPORTANT|$))/is
-          ))?.[1]?.trim(),
-      };
-
-      // Check if we have valid data
-      const hasValidData = Object.values(structuredAnalysis).some((v) => v);
-
-      if (!hasValidData) {
-        // Fall back to simple section extraction if more complex patterns fail
-        const sections = analysis.split(/\n\s*\n|\r\n\s*\r\n/);
-
-        if (sections.length >= 4) {
-          return {
-            transcription: sections[0].replace(/^[^:]*:\s*/, "").trim(),
-            summary: sections[1].replace(/^[^:]*:\s*/, "").trim(),
-            detection: sections[2].replace(/^[^:]*:\s*/, "").trim(),
-            sentiment: sections[3].replace(/^[^:]*:\s*/, "").trim(),
-          };
-        }
-      }
-
-      return structuredAnalysis;
+    // Prepare analysis results
+    const rawAnalysisResults = {
+      timestamp: new Date().toISOString(),
+      imageAnalysis,
+      audioAnalysis,
     };
 
-    const structuredAnalysis = parseAnalysisOutput(analysis);
-    console.log("Structured Analysis:", structuredAnalysis);
+    // Save results to a temporary JSON file
+    const resultsPath = path.join(tempDir, "analysis.json");
+    fs.writeFileSync(resultsPath, JSON.stringify(rawAnalysisResults, null, 2));
 
-    // Save analysis to MongoDB
-    await prisma.videoAnalysis.upsert({
-      where: { videoUrl },
-      update: {
-        transcription: structuredAnalysis.transcription,
-        summary: structuredAnalysis.summary,
-        detection: structuredAnalysis.detection,
-        sentiment: structuredAnalysis.sentiment,
-      },
-      create: {
-        videoUrl,
-        transcription: structuredAnalysis.transcription,
-        summary: structuredAnalysis.summary,
-        detection: structuredAnalysis.detection,
-        sentiment: structuredAnalysis.sentiment,
-      },
-    });
+    // Upload analysis results to S3
+    const analysisUrl = await uploadToS3(resultsPath, `analysis/${Date.now()}.json`);
 
-    return NextResponse.json({ structuredAnalysis }, { status: 200 });
+    // Cleanup temporary files
+    fs.rmSync(tempDir, { recursive: true, force: true });
+
+    return NextResponse.json(
+      {
+        rawAnalysisResults,
+        analysisUrl,
+      },
+      { status: 200 }
+    );
   } catch (error) {
     console.error("Error analyzing video:", error);
+    fs.rmSync(tempDir, { recursive: true, force: true });
     return NextResponse.json(
       { error: "Failed to analyze video" },
       { status: 500 }

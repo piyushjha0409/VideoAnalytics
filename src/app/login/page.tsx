@@ -19,7 +19,8 @@ const Page = () => {
       redirect: true,
       email: email,
       password: password,
-      callbackUrl: "https://video-analytics-five.vercel.app/upload",
+    //   callbackUrl: "https://video-analytics-five.vercel.app/upload",
+     callbackUrl: "http://localhost:3000/upload"
     });
 
     if (signInData?.error) {
