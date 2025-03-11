@@ -1,9 +1,4 @@
 import { NextResponse } from "next/server";
-import {
-  S3Client,
-  PutObjectCommand,
-  ObjectCannedACL,
-} from "@aws-sdk/client-s3";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import fs from "fs";
 import path from "path";
@@ -14,15 +9,6 @@ import { PrismaClient } from "@prisma/client";
 
 const execPromise = util.promisify(exec);
 const prisma = new PrismaClient();
-
-// Initialize S3 Client
-const s3Client = new S3Client({
-  region: "eu-north-1",
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
 
 // Function to extract frames from video at a specific interval (e.g., 1 frame every 5 seconds)
 async function extractFrames(videoPath: string, outputDir: string) {
@@ -40,27 +26,10 @@ async function extractAudio(videoPath: string, audioPath: string) {
   console.log("Audio extracted successfully.");
 }
 
-// Function to upload files to S3
-async function uploadToS3(filePath: string, key: string) {
-  console.log(`Uploading ${filePath} to S3...`);
-  const fileBuffer = fs.readFileSync(filePath);
-  const uploadParams = {
-    Bucket: process.env.AWS_S3_BUCKET_NAME!,
-    Key: key,
-    Body: fileBuffer,
-    ContentType: key.endsWith(".json")
-      ? "application/json"
-      : "binary/octet-stream",
-    ACL: ObjectCannedACL.private,
-  };
-  await s3Client.send(new PutObjectCommand(uploadParams));
-  console.log(`Upload successful: ${key}`);
-  return `https://${process.env.AWS_S3_BUCKET_NAME}.s3.eu-north-1.amazonaws.com/${key}`;
-}
-
 export async function POST(request: Request) {
   const formData = await request.formData();
   const videoFile = formData.get("file") as File;
+  const s3Url = formData.get("s3Url") as string | null; // Explicitly type as string | null
 
   if (!videoFile) {
     return NextResponse.json(
@@ -68,6 +37,16 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+
+  // Ensure videoUrl is always a string
+  if (!s3Url) {
+    return NextResponse.json(
+      { error: "s3Url is required" },
+      { status: 400 }
+    );
+  }
+
+  const videoUrl = s3Url; // Now videoUrl is guaranteed to be a string
 
   const tempDir = path.join("/tmp", `analysis-${Date.now()}`);
   const videoPath = path.join(tempDir, "video.mp4");
@@ -85,9 +64,7 @@ export async function POST(request: Request) {
 
     console.log("Video saved locally at:", videoPath);
 
-    // Upload the video file to S3
-    const videoKey = `videos/${Date.now()}-${videoFile.name}`;
-    const videoUrl = await uploadToS3(videoPath, videoKey);
+    // Log the S3 URL
     console.log("Video uploaded to S3:", videoUrl);
 
     // Extract frames & audio
@@ -168,7 +145,7 @@ export async function POST(request: Request) {
 
     // Prepare structured analysis results
     const structuredAnalysis = {
-      videoUrl, // Use the S3 URL of the uploaded video
+      videoUrl, // videoUrl is now guaranteed to be a string
       transcription,
       summary,
       detection,
@@ -178,11 +155,6 @@ export async function POST(request: Request) {
     // Save results to a temporary JSON file
     const resultsPath = path.join(tempDir, "analysis.json");
     fs.writeFileSync(resultsPath, JSON.stringify(structuredAnalysis, null, 2));
-
-    // Upload analysis results to S3
-    const analysisKey = `analysis/${Date.now()}.json`;
-    const analysisUrl = await uploadToS3(resultsPath, analysisKey);
-    console.log("Analysis results uploaded to S3:", analysisUrl);
 
     const savedAnalysis = await prisma.videoAnalysis.upsert({
       where: { videoUrl },
@@ -198,7 +170,6 @@ export async function POST(request: Request) {
         message: "Analysis completed successfully",
         analysis: savedAnalysis,
         videoUrl,
-        analysisUrl,
       },
       { status: 200 }
     );

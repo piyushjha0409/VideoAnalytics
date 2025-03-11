@@ -1,14 +1,13 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation"; // Import useRouter for redirection
 import { useSession } from "next-auth/react"; // Import useSession to check authentication
 import { UploadIcon, FileVideo, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import LogoutButton from "@/components/LogoutButton"; // Import the LogoutButton component
+import { upload } from "@vercel/blob/client";
 
 export default function Page() {
-  const router = useRouter(); // Initialize the router
   const { data: session } = useSession(); // Check if the user is authenticated
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -64,29 +63,58 @@ export default function Page() {
     if (!file) return;
 
     setLoading(true);
-    const formData = new FormData();
-    formData.append("file", file);
+    setError(null);
 
     try {
-      // Upload the file and analyze it in a single request
-      const response = await fetch("/api/model", {
+      // Step 1: Upload the video file to Vercel Blob
+      const blob = await upload(file.name, file, {
+        access: "public", // Make the file publicly accessible
+        handleUploadUrl: "/api/blobUpload", // API route for handling uploads
+      });
+      console.log("Uploaded to Vercel Blob:", blob.url);
+
+      // Step 2: Transfer the file from Vercel Blob to AWS S3
+      const uploadToS3Response = await fetch("/api/uploadToS3", {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          fileName: file.name,
+          contentType: file.type,
+        }),
       });
 
-      if (!response.ok) {
+      if (!uploadToS3Response.ok) {
+        throw new Error("Failed to upload video to S3");
+      }
+
+      const { s3Url } = await uploadToS3Response.json();
+      console.log("Uploaded to S3:", s3Url);
+
+      // Step 3: Send the file and S3 URL to /api/model using FormData
+      const formData = new FormData();
+      formData.append("file", file); // Append the file
+      formData.append("s3Url", s3Url); // Append the S3 URL
+
+      const modelResponse = await fetch("/api/model", {
+        method: "POST",
+        body: formData, // Send FormData
+      });
+
+      if (!modelResponse.ok) {
         throw new Error("Failed to analyze video");
       }
 
-      const data = await response.json();
-      console.log("Analysis result:", data);
+      const analysisResult = await modelResponse.json();
+      console.log("Analysis result:", analysisResult);
 
-      // Redirect to /dashboard after successful analysis
-      const videoUrl = data.videoUrl;
-      const encodedVideoUrl = encodeURIComponent(videoUrl);
-      router.push(`/dashboard/${encodedVideoUrl}`);
+      // Redirect to /dashboard with the video URL
+      const encodedVideoUrl = encodeURIComponent(s3Url);
+      window.location.href = `/dashboard/${encodedVideoUrl}`;
     } catch (error) {
-      console.error("Analysis failed:", error);
+      console.error("Error during video analysis:", error);
       setError("An error occurred during analysis. Please try again.");
     } finally {
       setLoading(false);
