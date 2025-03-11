@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
@@ -12,18 +11,32 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useSession } from "next-auth/react";
-import { FileText, BarChart2, MessageSquare, ThumbsUp, Image as ImageIcon } from "lucide-react";
+import {
+  FileText,
+  BarChart2,
+  MessageSquare,
+  ThumbsUp,
+  Image as ImageIcon,
+  Send,
+} from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 type LabeledImages = {
-  [label: string]: string[]; // Key: label, Value: array of image URLs
+  [label: string]: string[]; // Key: label, Value: array of object names
 };
 
 type VideoAnalysis = {
   summary?: string;
   transcription?: string;
-  detection?: string; // Contains JSON string of labeled image URLs
+  detection?: string; // Contains JSON string of labeled object names
   sentiment?: string;
+};
+
+type FollowUpQuestion = {
+  question: string;
+  answer: string;
 };
 
 export default function Dashboard() {
@@ -32,7 +45,12 @@ export default function Dashboard() {
 
   const [analysis, setAnalysis] = useState<VideoAnalysis | null>(null);
   const [loading, setLoading] = useState(true);
-  const [labeledImages, setLabeledImages] = useState<LabeledImages>({}); // State to store labeled image URLs
+  const [labeledImages, setLabeledImages] = useState<LabeledImages>({}); // State to store labeled object names
+  const [followUpQuestion, setFollowUpQuestion] = useState("");
+  const [followUpHistory, setFollowUpHistory] = useState<FollowUpQuestion[]>(
+    []
+  );
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Fetch analysis data on component mount
   useEffect(() => {
@@ -48,7 +66,9 @@ export default function Dashboard() {
         }
 
         // Fetch analysis data from the API
-        const response = await fetch(`/api/getVideoDetails?videoUrl=${videoUrl}`);
+        const response = await fetch(
+          `/api/getVideoDetails?videoUrl=${videoUrl}`
+        );
 
         if (!response.ok) {
           throw new Error("Failed to fetch analysis");
@@ -59,7 +79,10 @@ export default function Dashboard() {
 
         // Parse the JSON string in the detection field
         if (data.analysis?.detection) {
-          const jsonString = data.analysis.detection.replace(/```json\n|\n```/g, ""); // Remove JSON code block markers
+          const jsonString = data.analysis.detection.replace(
+            /```json\n|\n```/g,
+            ""
+          ); // Remove JSON code block markers
           const parsedData: LabeledImages = JSON.parse(jsonString); // Parse JSON string
           setLabeledImages(parsedData);
         }
@@ -72,6 +95,48 @@ export default function Dashboard() {
 
     fetchAnalysis();
   }, [params.videoUrl]);
+
+  const handleFollowUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!followUpQuestion.trim()) return;
+
+    try {
+      setIsSubmitting(true);
+
+      const response = await fetch("/api/askQuestions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          context: analysis?.summary,
+          question: followUpQuestion,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to get an answer");
+      }
+
+      const data = await response.json();
+      const answer = data.answer;
+
+      const newQuestion: FollowUpQuestion = {
+        question: followUpQuestion,
+        answer,
+      };
+
+      setFollowUpHistory([...followUpHistory, newQuestion]);
+      setFollowUpQuestion("");
+    } catch (error) {
+      console.error("Error submitting follow-up question:", error);
+      alert(
+        "An error occurred while processing your question. Please try again."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -152,23 +217,23 @@ export default function Dashboard() {
                 Content Detection
               </CardTitle>
               <CardDescription>
-                Analysis of video content types and topics
+                Analysis of objects detected in the video
               </CardDescription>
             </CardHeader>
             <CardContent>
               <p className="text-lg leading-relaxed">{analysis?.detection}</p>
-              {/* Render labeled image URLs */}
-              {Object.entries(labeledImages).map(([label, urls]) => (
+              {/* Render the list of object names */}
+              {Object.entries(labeledImages).map(([label, objects]) => (
                 <div key={label} className="mt-4 space-y-2">
                   <h3 className="font-semibold text-lg">{label}</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                    {urls.map((url, index) => (
-                      <img
+                    {objects.map((object, index) => (
+                      <div
                         key={index}
-                        src={url}
-                        alt={`${label} ${index + 1}`}
-                        className="rounded-lg shadow-md w-full h-auto"
-                      />
+                        className="p-4 bg-muted rounded-lg shadow-sm"
+                      >
+                        <p className="text-sm">{object}</p>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -194,6 +259,58 @@ export default function Dashboard() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Card className="mt-8">
+        <CardHeader>
+          <CardTitle>Ask Follow-up Questions</CardTitle>
+          <CardDescription>
+            Get more insights about the video content
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {followUpHistory.length > 0 && (
+              <ScrollArea className="h-[300px] rounded-md border p-4">
+                <div className="space-y-4">
+                  {followUpHistory.map((item, index) => (
+                    <div key={index} className="space-y-2">
+                      <div className="flex items-start gap-2">
+                        <div className="bg-primary text-primary-foreground rounded-full p-2 h-8 w-8 flex items-center justify-center">
+                          <span className="text-xs font-bold">You</span>
+                        </div>
+                        <div className="bg-muted p-3 rounded-lg">
+                          <p>{item.question}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="bg-secondary text-secondary-foreground rounded-full p-2 h-8 w-8 flex items-center justify-center">
+                          <span className="text-xs font-bold">AI</span>
+                        </div>
+                        <div className="bg-secondary/20 p-3 rounded-lg">
+                          <p>{item.answer}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+
+            <form onSubmit={handleFollowUpSubmit} className="flex gap-2">
+              <Input
+                placeholder="Ask a question about the video..."
+                value={followUpQuestion}
+                onChange={(e) => setFollowUpQuestion(e.target.value)}
+                className="flex-1"
+              />
+              <Button type="submit" disabled={isSubmitting}>
+                <Send className="h-4 w-4 mr-2" />
+                {isSubmitting ? "Sending..." : "Send"}
+              </Button>
+            </form>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

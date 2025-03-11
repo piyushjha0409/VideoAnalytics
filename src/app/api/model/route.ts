@@ -113,7 +113,7 @@ export async function POST(request: Request) {
       const base64Audio = audioBuffer.toString("base64");
       const response = await model.generateContent([
         { inlineData: { mimeType: "audio/mpeg", data: base64Audio } },
-        "Transcribe the spoken content in the audio.",
+        "Transcribe the spoken content in the audio in details, timing is not necessary",
       ]);
       transcription = (await response.response).text();
     } catch (error) {
@@ -133,7 +133,7 @@ export async function POST(request: Request) {
         };
       });
       const response = await model.generateContent([
-        "Provide image URLs for each detected object in the list below. Each object should be linked to a high-quality, royalty-free image from a trusted source (e.g., Unsplash, Pexels, Wikimedia). Format the response as a JSON object where the keys are the detected objects and the values are arrays of image URLs.",
+        "Give me list of the names of the Objects that are being used in this video",
         ...base64Images,
       ]);
       detection = (await response.response).text();
@@ -158,7 +158,7 @@ export async function POST(request: Request) {
     let sentiment = "";
     try {
       const response = await model.generateContent([
-        `Analyze the sentiment of the following text and provide the result as "positive", "negative", or "neutral":
+        `Analyze the sentiment of the following text and provide the result as "positive", "negative", or "neutral", also describe that sentiment:
         - Transcription: ${transcription}`,
       ]);
       sentiment = (await response.response).text();
