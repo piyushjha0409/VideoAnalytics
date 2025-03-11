@@ -82,7 +82,9 @@ export default function Page() {
       console.log("Analysis result:", data);
 
       // Redirect to /dashboard after successful analysis
-      router.push(`/dashboard`);
+      const videoUrl = data.videoUrl;
+      const encodedVideoUrl = encodeURIComponent(videoUrl);
+      router.push(`/dashboard/${encodedVideoUrl}`);
     } catch (error) {
       console.error("Analysis failed:", error);
       setError("An error occurred during analysis. Please try again.");
@@ -139,7 +141,9 @@ export default function Page() {
                 </div>
                 <Button
                   variant="outline"
-                  onClick={() => document.getElementById("file-upload")?.click()}
+                  onClick={() =>
+                    document.getElementById("file-upload")?.click()
+                  }
                 >
                   Select Video
                 </Button>

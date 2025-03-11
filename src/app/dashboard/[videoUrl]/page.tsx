@@ -1,7 +1,6 @@
 "use client";
 
-import type React from "react";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Card,
@@ -10,37 +9,30 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { VideoAnalysis } from "../../../../types/VideoAnalysis";
 import { useSession } from "next-auth/react";
-import {
-  FileText,
-  BarChart2,
-  MessageSquare,
-  ThumbsUp,
-  Send,
-  Video,
-} from "lucide-react";
+import { FileText, BarChart2, MessageSquare, ThumbsUp, Image as ImageIcon } from "lucide-react";
 import LogoutButton from "@/components/LogoutButton";
 
-type FollowUpQuestion = {
-  question: string;
-  answer: string;
+type LabeledImages = {
+  [label: string]: string[]; // Key: label, Value: array of image URLs
+};
+
+type VideoAnalysis = {
+  summary?: string;
+  transcription?: string;
+  detection?: string; // Contains JSON string of labeled image URLs
+  sentiment?: string;
 };
 
 export default function Dashboard() {
   const params = useParams();
   const session = useSession();
 
-  const [analysis, setAnalysis] = useState<Partial<VideoAnalysis> | null>(null);
+  const [analysis, setAnalysis] = useState<VideoAnalysis | null>(null);
   const [loading, setLoading] = useState(true);
-  const [followUpQuestion, setFollowUpQuestion] = useState("");
-  const [followUpHistory, setFollowUpHistory] = useState<FollowUpQuestion[]>(
-    []
-  );
+  const [labeledImages, setLabeledImages] = useState<LabeledImages>({}); // State to store labeled image URLs
 
   // Fetch analysis data on component mount
   useEffect(() => {
@@ -49,16 +41,14 @@ export default function Dashboard() {
         setLoading(true);
 
         // Get the videoUrl from the URL pathname
-        let videoUrl = params.videoUrl as string; // Access the videoUrl parameter
-        videoUrl = decodeURIComponent(params.videoUrl as string);
+        const videoUrl = decodeURIComponent(params.videoUrl as string);
 
         if (!videoUrl) {
           throw new Error("Video URL is required");
         }
+
         // Fetch analysis data from the API
-        const response = await fetch(
-          `/api/getVideoDetails?videoUrl=${videoUrl}`
-        );
+        const response = await fetch(`/api/getVideoDetails?videoUrl=${videoUrl}`);
 
         if (!response.ok) {
           throw new Error("Failed to fetch analysis");
@@ -66,6 +56,13 @@ export default function Dashboard() {
 
         const data = await response.json();
         setAnalysis(data.analysis);
+
+        // Parse the JSON string in the detection field
+        if (data.analysis?.detection) {
+          const jsonString = data.analysis.detection.replace(/```json\n|\n```/g, ""); // Remove JSON code block markers
+          const parsedData: LabeledImages = JSON.parse(jsonString); // Parse JSON string
+          setLabeledImages(parsedData);
+        }
       } catch (error) {
         console.error("Error fetching analysis:", error);
       } finally {
@@ -74,48 +71,7 @@ export default function Dashboard() {
     };
 
     fetchAnalysis();
-  }, [params.videoUrl]); // Re-run effect when videoUrl changes
-
-  //function for follow up submit
-  const handleFollowUpSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!followUpQuestion.trim()) return;
-
-    try {
-      const videoUrl = decodeURIComponent(params.videoUrl as string);
-
-      const response = await fetch("/api/askQuestions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          videoUrl,
-          question: followUpQuestion,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to get an answer");
-      }
-
-      const data = await response.json();
-      const answer = data.answer;
-
-      const newQuestion: FollowUpQuestion = {
-        question: followUpQuestion,
-        answer,
-      };
-
-      setFollowUpHistory([...followUpHistory, newQuestion]);
-      setFollowUpQuestion("");
-    } catch (error) {
-      console.error("Error submitting follow-up question:", error);
-      alert(
-        "An error occurred while processing your question. Please try again."
-      );
-    }
-  };
+  }, [params.videoUrl]);
 
   if (loading) {
     return (
@@ -133,7 +89,7 @@ export default function Dashboard() {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Video Analysis Dashboard</h1>
         <div className="flex items-center gap-2 text-muted-foreground">
-          <Video className="h-5 w-5" />
+          <ImageIcon className="h-5 w-5" />
           <span>AI-Powered Video Analysis</span>
         </div>
       </div>
@@ -201,6 +157,22 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <p className="text-lg leading-relaxed">{analysis?.detection}</p>
+              {/* Render labeled image URLs */}
+              {Object.entries(labeledImages).map(([label, urls]) => (
+                <div key={label} className="mt-4 space-y-2">
+                  <h3 className="font-semibold text-lg">{label}</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    {urls.map((url, index) => (
+                      <img
+                        key={index}
+                        src={url}
+                        alt={`${label} ${index + 1}`}
+                        className="rounded-lg shadow-md w-full h-auto"
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
             </CardContent>
           </Card>
         </TabsContent>
@@ -222,58 +194,6 @@ export default function Dashboard() {
           </Card>
         </TabsContent>
       </Tabs>
-
-      <Card className="mt-8">
-        <CardHeader>
-          <CardTitle>Ask Follow-up Questions</CardTitle>
-          <CardDescription>
-            Get more insights about the video content
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {followUpHistory.length > 0 && (
-              <ScrollArea className="h-[300px] rounded-md border p-4">
-                <div className="space-y-4">
-                  {followUpHistory.map((item, index) => (
-                    <div key={index} className="space-y-2">
-                      <div className="flex items-start gap-2">
-                        <div className="bg-primary text-primary-foreground rounded-full p-2 h-8 w-8 flex items-center justify-center">
-                          <span className="text-xs font-bold">You</span>
-                        </div>
-                        <div className="bg-muted p-3 rounded-lg">
-                          <p>{item.question}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <div className="bg-secondary text-secondary-foreground rounded-full p-2 h-8 w-8 flex items-center justify-center">
-                          <span className="text-xs font-bold">AI</span>
-                        </div>
-                        <div className="bg-secondary/20 p-3 rounded-lg">
-                          <p>{item.answer}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
-            )}
-
-            <form onSubmit={handleFollowUpSubmit} className="flex gap-2">
-              <Input
-                placeholder="Ask a question about the video..."
-                value={followUpQuestion}
-                onChange={(e) => setFollowUpQuestion(e.target.value)}
-                className="flex-1"
-              />
-              <Button type="submit">
-                <Send className="h-4 w-4 mr-2" />
-                Send
-              </Button>
-            </form>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

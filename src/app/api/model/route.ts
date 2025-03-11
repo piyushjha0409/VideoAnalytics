@@ -10,9 +10,10 @@ import path from "path";
 import { exec } from "child_process";
 import util from "util";
 import { writeFile } from "fs/promises";
-import { GenerateContentResult } from "@google/generative-ai";
+import { PrismaClient } from "@prisma/client";
 
 const execPromise = util.promisify(exec);
+const prisma = new PrismaClient();
 
 // Initialize S3 Client
 const s3Client = new S3Client({
@@ -84,6 +85,11 @@ export async function POST(request: Request) {
 
     console.log("Video saved locally at:", videoPath);
 
+    // Upload the video file to S3
+    const videoKey = `videos/${Date.now()}-${videoFile.name}`;
+    const videoUrl = await uploadToS3(videoPath, videoKey);
+    console.log("Video uploaded to S3:", videoUrl);
+
     // Extract frames & audio
     await extractFrames(videoPath, framesDir); // Extract 1 frame every 5 seconds
     await extractAudio(videoPath, audioPath);
@@ -96,63 +102,102 @@ export async function POST(request: Request) {
 
     // Initialize Gemini AI
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-thinking-exp" });
-
-    // Prepare an array of base64 images
-    const base64Images = imageFiles.map((imagePath) => {
-      const imageBuffer = fs.readFileSync(imagePath);
-      return {
-        inlineData: {
-          mimeType: "image/jpeg",
-          data: imageBuffer.toString("base64"),
-        },
-      };
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash-thinking-exp",
     });
 
-    // Analyze all images in a single request
-    let imageAnalysis: GenerateContentResult | null = null;
-    try {
-      const prompt = "Describe the objects, scene, and any visible text in these images.";
-      const response = await model.generateContent([prompt, ...base64Images]);
-      imageAnalysis = response;
-    } catch (error) {
-      console.error("Error analyzing images:", error);
-    }
-
-    // Analyze audio
-    let audioAnalysis: GenerateContentResult | null = null;
+    // Step 1: Transcribe Audio
+    let transcription = "";
     try {
       const audioBuffer = fs.readFileSync(audioPath);
       const base64Audio = audioBuffer.toString("base64");
       const response = await model.generateContent([
         { inlineData: { mimeType: "audio/mpeg", data: base64Audio } },
-        "Transcribe the spoken content and analyze sentiment.",
+        "Transcribe the spoken content in the audio.",
       ]);
-      audioAnalysis = response;
+      transcription = (await response.response).text();
     } catch (error) {
-      console.error("Error analyzing audio:", error);
+      console.error("Error transcribing audio:", error);
     }
 
-    // Prepare analysis results
-    const rawAnalysisResults = {
-      timestamp: new Date().toISOString(),
-      imageAnalysis,
-      audioAnalysis,
+    // Step 2: Object Detection
+    let detection = "";
+    try {
+      const base64Images = imageFiles.map((imagePath) => {
+        const imageBuffer = fs.readFileSync(imagePath);
+        return {
+          inlineData: {
+            mimeType: "image/jpeg",
+            data: imageBuffer.toString("base64"),
+          },
+        };
+      });
+      const response = await model.generateContent([
+        "Provide image URLs for each detected object in the list below. Each object should be linked to a high-quality, royalty-free image from a trusted source (e.g., Unsplash, Pexels, Wikimedia). Format the response as a JSON object where the keys are the detected objects and the values are arrays of image URLs.",
+        ...base64Images,
+      ]);
+      detection = (await response.response).text();
+    } catch (error) {
+      console.error("Error detecting objects:", error);
+    }
+
+    // Step 3: Generate Detailed Summary
+    let summary = "";
+    try {
+      const response = await model.generateContent([
+        `Provide a detailed summary of the video based on the following:
+        - Transcription: ${transcription}
+        - Detected Objects: ${detection}`,
+      ]);
+      summary = (await response.response).text();
+    } catch (error) {
+      console.error("Error generating summary:", error);
+    }
+
+    // Step 4: Sentiment Analysis
+    let sentiment = "";
+    try {
+      const response = await model.generateContent([
+        `Analyze the sentiment of the following text and provide the result as "positive", "negative", or "neutral":
+        - Transcription: ${transcription}`,
+      ]);
+      sentiment = (await response.response).text();
+    } catch (error) {
+      console.error("Error analyzing sentiment:", error);
+    }
+
+    // Prepare structured analysis results
+    const structuredAnalysis = {
+      videoUrl, // Use the S3 URL of the uploaded video
+      transcription,
+      summary,
+      detection,
+      sentiment,
     };
 
     // Save results to a temporary JSON file
     const resultsPath = path.join(tempDir, "analysis.json");
-    fs.writeFileSync(resultsPath, JSON.stringify(rawAnalysisResults, null, 2));
+    fs.writeFileSync(resultsPath, JSON.stringify(structuredAnalysis, null, 2));
 
     // Upload analysis results to S3
-    const analysisUrl = await uploadToS3(resultsPath, `analysis/${Date.now()}.json`);
+    const analysisKey = `analysis/${Date.now()}.json`;
+    const analysisUrl = await uploadToS3(resultsPath, analysisKey);
+    console.log("Analysis results uploaded to S3:", analysisUrl);
+
+    const savedAnalysis = await prisma.videoAnalysis.upsert({
+      where: { videoUrl },
+      update: structuredAnalysis,
+      create: structuredAnalysis,
+    });
 
     // Cleanup temporary files
     fs.rmSync(tempDir, { recursive: true, force: true });
 
     return NextResponse.json(
       {
-        rawAnalysisResults,
+        message: "Analysis completed successfully",
+        analysis: savedAnalysis,
+        videoUrl,
         analysisUrl,
       },
       { status: 200 }
