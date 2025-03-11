@@ -20,7 +20,7 @@ const Page = () => {
       email: email,
       password: password,
     //   callbackUrl: "https://video-analytics-five.vercel.app/upload",
-     callbackUrl: "http://localhost:3000/upload"
+     callbackUrl: "https://video-analytics-five.vercel.app/upload"
     });
 
     if (signInData?.error) {
